@@ -1,0 +1,594 @@
+---
+title: "Densidad de Airbnb"
+author: "EcoData"
+format:
+  dashboard:
+    theme: cosmo
+    logo: https://upload.wikimedia.org/wikipedia/commons/6/69/Airbnb_Logo_B%C3%A9lo.svg
+    orientation: columns
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(sf)
+library(dplyr)
+library(mapgl)
+library(h3)
+library(ggplot2)
+library(plotly)
+library(tidyr)
+library(DT)
+library(tibble)
+library(scales)
+library(viridis)
+
+# Cargar datos base de Airbnb
+listings <- st_read("outputs/01_listings_core.geojson", quiet = TRUE)
+
+merida_center <- c(-89.6167, 20.9667)
+
+# Generar hexágonos H3 con resolución 9 y calcular densidad
+hex_h3_res9 <- listings %>%
+  # Obtener coordenadas de las propiedades
+  mutate(
+    lon = st_coordinates(.)[, 1],
+    lat = st_coordinates(.)[, 2]
+  ) %>%
+  # Convertir a hexágonos H3
+  mutate(h3_index = h3::geo_to_h3(cbind(lat, lon), res = 9)) %>%
+  # Calcular estadísticas por hexágono
+  group_by(h3_index) %>%
+  summarise(
+    num_properties = n(),
+    avg_price = mean(precio_total, na.rm = TRUE),
+    median_price = median(precio_total, na.rm = TRUE),
+    avg_rating = mean(if_else(calificacion > 0, calificacion, NA_real_), na.rm = TRUE),
+    total_reviews = sum(num_reseñas, na.rm = TRUE),
+    avg_price_per_night = mean(price_per_night, na.rm = TRUE),
+    min_price = min(precio_total, na.rm = TRUE),
+    max_price = max(precio_total, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # Convertir hexágonos H3 a geometría usando h3 directamente
+  ungroup() %>%
+  st_drop_geometry()
+
+# Crear geometrías de hexágonos H3 y combinar con datos
+hex_geometries <- h3::h3_to_geo_boundary_sf(hex_h3_res9$h3_index)
+hex_h3_res9 <- hex_h3_res9 %>%
+  cbind(st_geometry(hex_geometries)) %>%
+  st_as_sf()
+
+# Clasificar hexágonos por densidad
+hex_density_stats <- hex_h3_res9 %>%
+  mutate(
+    density_category = case_when(
+      num_properties >= 20 ~ "Muy Alta (20+)",
+      num_properties >= 10 ~ "Alta (10-19)",
+      num_properties >= 5 ~ "Media (5-9)",
+      num_properties >= 2 ~ "Baja (2-4)",
+      TRUE ~ "Muy Baja (1)"
+    ),
+    density_category = factor(
+      density_category,
+      levels = c("Muy Baja (1)", "Baja (2-4)", "Media (5-9)", "Alta (10-19)", "Muy Alta (20+)")
+    )
+  ) %>%
+  # Añadir percentiles de precio y rating
+  mutate(
+    price_percentile = percent_rank(avg_price),
+    rating_percentile = percent_rank(avg_rating)
+  )
+
+# Preparar datos para popup
+hex_density_popup <- hex_density_stats %>%
+  mutate(
+    popup_info = paste0(
+      "<div style='font-family: Arial; max-width: 280px; padding: 8px;'>",
+      "<h4 style='margin: 0 0 8px 0; color: #111827;'>Hexágono H3</h4>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>ID:</strong> ", substr(h3_index, 1, 12), "...</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Propiedades:</strong> ", num_properties, "</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Densidad:</strong> ", density_category, "</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Rating promedio:</strong> ",
+      if_else(is.na(avg_rating), "Sin datos", paste0(round(avg_rating, 2), "/5.0")), "</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Total reseñas:</strong> ",
+      format(total_reviews, big.mark = ","), "</p>",
+      "</div>"
+    )
+  )
+
+# Calcular métricas de resumen
+total_hexagons <- nrow(hex_density_stats)
+total_properties_hex <- sum(hex_density_stats$num_properties)
+avg_properties_per_hex <- round(mean(hex_density_stats$num_properties), 1)
+high_density_hexagons <- sum(hex_density_stats$num_properties >= 10)
+```
+
+# Mapa Principal
+
+## Densidad por Hexágonos H3
+
+```{r}
+#| title: Mapa de Densidad
+
+maplibre(
+  style = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
+  center = merida_center,
+  zoom = 11
+) %>%
+  add_fill_layer(
+    id = "hex-density",
+    source = hex_density_popup,
+    fill_color = list(
+      "match",
+      list("get", "density_category"),
+      "Muy Baja (1)", "#f8fafc",
+      "Baja (2-4)", "#cbd5e1",
+      "Media (5-9)", "#64748b",
+      "Alta (10-19)", "#374151",
+      "Muy Alta (20+)", "#111827",
+      "#e2e8f0"
+    ),
+    fill_opacity = 0.8,
+    fill_outline_color = "#ffffff",
+    popup = "popup_info"
+  ) %>%
+  add_categorical_legend(
+    legend_title = "Densidad de Propiedades",
+    values = c("Muy Baja (1)", "Baja (2-4)", "Media (5-9)", "Alta (10-19)", "Muy Alta (20+)"),
+    colors = c("#f8fafc", "#cbd5e1", "#64748b", "#374151", "#111827"),
+    position = "bottom-right"
+  ) %>%
+  add_navigation_control(position = "top-right") %>%
+  add_fullscreen_control(position = "top-left")
+```
+
+# Análisis de Densidad
+
+## Column
+
+### Distribución por Categoría
+
+```{r}
+#| title: Hexágonos por Nivel de Densidad
+
+density_distribution <- hex_density_stats %>%
+  st_drop_geometry() %>%
+  count(density_category) %>%
+  mutate(
+    percentage = round(n / sum(n) * 100, 1)
+  )
+
+ggplotly(
+  ggplot(density_distribution, aes(x = density_category, y = n, fill = density_category)) +
+    geom_col(width = 0.7) +
+    geom_text(aes(label = paste0(n, "\n(", percentage, "%)")),
+              vjust = -0.3, size = 3.5) +
+    scale_fill_manual(
+      values = c(
+        "Muy Baja (1)" = "#f8fafc",
+        "Baja (2-4)" = "#cbd5e1",
+        "Media (5-9)" = "#64748b",
+        "Alta (10-19)" = "#374151",
+        "Muy Alta (20+)" = "#111827"
+      )
+    ) +
+    labs(
+      x = "Categoría de Densidad",
+      y = "Número de Hexágonos",
+      title = "Distribución de Hexágonos por Densidad"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    ) +
+    ylim(0, max(density_distribution$n) * 1.2)
+)
+```
+
+### Estadísticas de Densidad
+
+```{r}
+#| title: Métricas por Hexágono
+
+density_stats_table <- hex_density_stats %>%
+  st_drop_geometry() %>%
+  group_by(density_category) %>%
+  summarise(
+    hexagons = n(),
+    total_props = sum(num_properties),
+    avg_rating = mean(avg_rating, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(hexagons))
+
+datatable(
+  density_stats_table,
+  colnames = c(
+    "Categoría" = "density_category",
+    "Hexágonos" = "hexagons",
+    "Total Props." = "total_props",
+    "Rating Prom." = "avg_rating"
+  ),
+  options = list(
+    pageLength = 10,
+    scrollX = TRUE,
+    dom = "tip"
+  ),
+  rownames = FALSE,
+  class = 'cell-border stripe hover'
+) %>%
+  formatRound("Rating Prom.", digits = 2)
+```
+
+## Column
+
+### Correlación Densidad-Precio
+
+```{r}
+#| title: Densidad vs Precio Promedio
+
+ggplotly(
+  hex_density_stats %>%
+    st_drop_geometry() %>%
+    filter(!is.na(avg_price)) %>%
+    ggplot(aes(x = num_properties, y = avg_price, color = density_category)) +
+    geom_point(alpha = 0.7, size = 3) +
+    geom_smooth(method = "loess", se = FALSE, color = "#374151", linetype = "dashed") +
+    scale_color_manual(
+      values = c(
+        "Muy Baja (1)" = "#f8fafc",
+        "Baja (2-4)" = "#cbd5e1",
+        "Media (5-9)" = "#64748b",
+        "Alta (10-19)" = "#374151",
+        "Muy Alta (20+)" = "#111827"
+      )
+    ) +
+    labs(
+      x = "Número de Propiedades",
+      y = "Precio Promedio (MXN)",
+      color = "Densidad",
+      title = "Relación entre Densidad y Precio"
+    ) +
+    theme_minimal()
+)
+```
+
+### Top Hexágonos por Densidad
+
+```{r}
+#| title: Hexágonos con Mayor Concentración
+
+top_hex_table <- hex_density_stats %>%
+  st_drop_geometry() %>%
+  arrange(desc(num_properties)) %>%
+  head(15) %>%
+  select(
+    `ID Hex` = h3_index,
+    `Props.` = num_properties,
+    `Rating` = avg_rating,
+    `Categoría` = density_category
+  ) %>%
+  mutate(
+    `ID Hex` = substr(`ID Hex`, 1, 12)
+  )
+
+datatable(
+  top_hex_table,
+  options = list(
+    pageLength = 8,
+    scrollX = TRUE,
+    dom = "tip"
+  ),
+  rownames = FALSE,
+  class = 'cell-border stripe hover'
+) %>%
+  formatRound("Rating", digits = 2)
+```
+
+# Mapas Temáticos
+
+## Row
+
+### Mapa de Precios por Hexágono
+
+```{r}
+#| title: Precio Promedio por Hexágono
+
+# Preparar datos de precios para popup
+hex_price_popup <- hex_density_stats %>%
+  filter(!is.na(avg_price)) %>%
+  mutate(
+    popup_info = paste0(
+      "<div style='font-family: Arial; max-width: 280px; padding: 8px;'>",
+      "<h4 style='margin: 0 0 8px 0; color: #111827;'>Hexágono H3</h4>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>ID:</strong> ", substr(h3_index, 1, 12), "...</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Propiedades:</strong> ", num_properties, "</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Densidad:</strong> ", density_category, "</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Rating promedio:</strong> ",
+      if_else(is.na(avg_rating), "Sin datos", paste0(round(avg_rating, 2), "/5.0")), "</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Total reseñas:</strong> ",
+      format(total_reviews, big.mark = ","), "</p>",
+      "</div>"
+    )
+  )
+
+# Calcular breaks para colores de precio
+price_breaks <- quantile(hex_price_popup$avg_price, probs = c(0.1, 0.3, 0.5, 0.7, 0.9), na.rm = TRUE)
+price_colors <- c("#f0f9ff", "#7dd3fc", "#0ea5e9", "#0369a1", "#0c4a6e")
+
+maplibre(
+  style = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+  center = merida_center,
+  zoom = 11
+) %>%
+  add_fill_layer(
+    id = "hex-prices",
+    source = hex_price_popup,
+    fill_color = list(
+      "interpolate", list("linear"), list("get", "avg_price"),
+      price_breaks[[1]], price_colors[1],
+      price_breaks[[2]], price_colors[2],
+      price_breaks[[3]], price_colors[3],
+      price_breaks[[4]], price_colors[4],
+      price_breaks[[5]], price_colors[5]
+    ),
+    fill_opacity = 0.8,
+    fill_outline_color = "#ffffff",
+    popup = "popup_info"
+  ) %>%
+  add_continuous_legend(
+    legend_title = "Precio Promedio (MXN)",
+    values = round(as.numeric(price_breaks), 0),
+    colors = price_colors,
+    position = "bottom-right"
+  ) %>%
+  add_navigation_control(position = "top-right")
+```
+
+### Mapa de Ratings por Hexágono
+
+```{r}
+#| title: Calificación Promedio por Hexágono
+
+# Preparar datos de ratings para popup
+hex_rating_popup <- hex_density_stats %>%
+  filter(!is.na(avg_rating)) %>%
+  mutate(
+    popup_info = paste0(
+      "<div style='font-family: Arial; max-width: 280px; padding: 8px;'>",
+      "<h4 style='margin: 0 0 8px 0; color: #111827;'>Hexágono H3</h4>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>ID:</strong> ", substr(h3_index, 1, 12), "...</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Propiedades:</strong> ", num_properties, "</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Densidad:</strong> ", density_category, "</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Rating promedio:</strong> ",
+      if_else(is.na(avg_rating), "Sin datos", paste0(round(avg_rating, 2), "/5.0")), "</p>",
+      "<p style='margin: 4px 0; font-size: 13px;'><strong>Total reseñas:</strong> ",
+      format(total_reviews, big.mark = ","), "</p>",
+      "</div>"
+    )
+  )
+
+# Calcular breaks para colores de rating
+rating_breaks <- quantile(hex_rating_popup$avg_rating, probs = c(0.1, 0.3, 0.5, 0.7, 0.9), na.rm = TRUE)
+rating_colors <- c("#fef2f2", "#fecaca", "#fbbf24", "#10b981", "#065f46")
+
+maplibre(
+  style = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
+  center = merida_center,
+  zoom = 11
+) %>%
+  add_fill_layer(
+    id = "hex-ratings",
+    source = hex_rating_popup,
+    fill_color = list(
+      "interpolate", list("linear"), list("get", "avg_rating"),
+      rating_breaks[[1]], rating_colors[1],
+      rating_breaks[[2]], rating_colors[2],
+      rating_breaks[[3]], rating_colors[3],
+      rating_breaks[[4]], rating_colors[4],
+      rating_breaks[[5]], rating_colors[5]
+    ),
+    fill_opacity = 0.8,
+    fill_outline_color = "#ffffff",
+    popup = "popup_info"
+  ) %>%
+  add_continuous_legend(
+    legend_title = "Rating Promedio",
+    values = round(as.numeric(rating_breaks), 2),
+    colors = rating_colors,
+    position = "bottom-left"
+  ) %>%
+  add_navigation_control(position = "top-right")
+```
+
+# Análisis Comparativo
+
+## Column
+
+### Distribución de Propiedades
+
+```{r}
+#| title: Histograma de Densidad por Hexágono
+
+ggplotly(
+  hex_density_stats %>%
+    st_drop_geometry() %>%
+    ggplot(aes(x = num_properties)) +
+    geom_histogram(bins = 30, fill = "#3b82f6", alpha = 0.7, color = "white") +
+    geom_vline(aes(xintercept = mean(num_properties)),
+               color = "#ef4444", linetype = "dashed", linewidth = 1) +
+    labs(
+      x = "Número de Propiedades por Hexágono",
+      y = "Frecuencia",
+      title = "Distribución de Densidad",
+      subtitle = "Línea roja indica la media"
+    ) +
+    theme_minimal()
+)
+```
+
+### Hexágonos vs Propiedades Totales
+
+```{r}
+#| title: Cobertura Espacial vs Concentración
+
+coverage_data <- hex_density_stats %>%
+  st_drop_geometry() %>%
+  arrange(desc(num_properties)) %>%
+  mutate(
+    hex_rank = row_number(),
+    cumulative_properties = cumsum(num_properties),
+    cumulative_pct = cumulative_properties / sum(num_properties) * 100
+  )
+
+ggplotly(
+  ggplot(coverage_data, aes(x = hex_rank, y = cumulative_pct)) +
+    geom_line(color = "#3b82f6", linewidth = 1.2) +
+    geom_point(color = "#1d4ed8", size = 2) +
+    geom_hline(yintercept = c(50, 80), linetype = "dashed", color = "gray") +
+    labs(
+      x = "Ranking de Hexágonos (por densidad)",
+      y = "% Acumulado de Propiedades",
+      title = "Curva de Concentración",
+      subtitle = "¿Qué % de hexágonos concentra el 80% de propiedades?"
+    ) +
+    theme_minimal()
+)
+```
+
+## Column
+
+### Matriz Densidad-Precio
+
+```{r}
+#| title: Análisis de Clusters por Densidad y Precio
+
+cluster_analysis <- hex_density_stats %>%
+  st_drop_geometry() %>%
+  filter(!is.na(avg_price), !is.na(num_properties)) %>%
+  mutate(
+    price_category = case_when(
+      avg_price >= quantile(avg_price, 0.75, na.rm = TRUE) ~ "Alto",
+      avg_price >= quantile(avg_price, 0.25, na.rm = TRUE) ~ "Medio",
+      TRUE ~ "Bajo"
+    ),
+    density_level = case_when(
+      num_properties >= 10 ~ "Alta",
+      num_properties >= 5 ~ "Media",
+      TRUE ~ "Baja"
+    )
+  )
+
+cluster_matrix <- cluster_analysis %>%
+  count(density_level, price_category) %>%
+  mutate(
+    density_level = factor(density_level, levels = c("Baja", "Media", "Alta")),
+    price_category = factor(price_category, levels = c("Bajo", "Medio", "Alto"))
+  )
+
+ggplotly(
+  ggplot(cluster_matrix, aes(x = density_level, y = price_category, fill = n)) +
+    geom_tile(color = "white", linewidth = 0.5) +
+    geom_text(aes(label = n), color = "white", fontface = "bold", size = 4) +
+    scale_fill_viridis_c(option = "plasma") +
+    labs(
+      x = "Nivel de Densidad",
+      y = "Categoría de Precio",
+      fill = "Hex Count",
+      title = "Matriz Densidad vs Precio"
+    ) +
+    theme_minimal()
+)
+```
+
+### Resumen Estadístico
+
+```{r}
+#| title: Estadísticas Clave por Hexágono
+
+summary_stats <- hex_density_stats %>%
+  st_drop_geometry() %>%
+  summarise(
+    total_hexagons = n(),
+    total_properties = sum(num_properties),
+    avg_properties_hex = round(mean(num_properties), 2),
+    median_properties_hex = median(num_properties),
+    max_properties_hex = max(num_properties),
+    avg_rating_overall = round(mean(avg_rating, na.rm = TRUE), 2),
+    hex_with_10plus = sum(num_properties >= 10)
+  ) %>%
+  pivot_longer(everything(), names_to = "Métrica", values_to = "Valor") %>%
+  mutate(
+    Métrica = case_when(
+      Métrica == "total_hexagons" ~ "Total Hexágonos",
+      Métrica == "total_properties" ~ "Total Propiedades",
+      Métrica == "avg_properties_hex" ~ "Promedio Props/Hex",
+      Métrica == "median_properties_hex" ~ "Mediana Props/Hex",
+      Métrica == "max_properties_hex" ~ "Máximo Props/Hex",
+      Métrica == "avg_rating_overall" ~ "Rating Promedio General",
+      Métrica == "hex_with_10plus" ~ "Hexágonos Alta Densidad (10+)",
+      TRUE ~ Métrica
+    )
+  )
+
+datatable(
+  summary_stats,
+  options = list(
+    pageLength = 10,
+    dom = "t",
+    ordering = FALSE
+  ),
+  rownames = FALSE,
+  class = 'cell-border stripe hover'
+) %>%
+  formatRound("Valor", digits = 2)
+```
+
+# Mapa de Calor Avanzado
+
+## Mapa de Calor 3D
+
+```{r}
+#| title: Densidad 3D por Hexágono
+
+# Crear mapa de calor con altura proporcional a la densidad
+maplibre(
+  style = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+  center = merida_center,
+  zoom = 10.5,
+  pitch = 45,
+  bearing = -17
+) %>%
+  add_fill_extrusion_layer(
+    id = "hex-3d",
+    source = hex_density_popup,
+    fill_extrusion_color = list(
+      "interpolate", list("linear"), list("get", "num_properties"),
+      1, "#f0f9ff",
+      5, "#38bdf8",
+      10, "#0369a1",
+      20, "#1e3a8a",
+      30, "#0f172a"
+    ),
+    fill_extrusion_height = list(
+      "interpolate", list("linear"), list("get", "num_properties"),
+      1, 50,
+      10, 300,
+      20, 600,
+      30, 1000
+    ),
+    fill_extrusion_opacity = 0.9,
+    popup = "popup_info"
+  ) %>%
+  add_continuous_legend(
+    legend_title = "Propiedades por Hexágono",
+    values = c(1, 10, 20, 30),
+    colors = c("#f0f9ff", "#38bdf8", "#0369a1", "#0f172a"),
+    position = "bottom-right"
+  ) %>%
+  add_navigation_control(position = "top-right")
+```
