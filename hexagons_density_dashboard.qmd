@@ -4,7 +4,7 @@ author: "EcoData"
 format:
   dashboard:
     theme: cosmo
-    logo: https://upload.wikimedia.org/wikipedia/commons/6/69/Airbnb_Logo_B%C3%A9lo.svg
+    logo: EcoData_bw.png
     orientation: columns
 ---
 
@@ -116,7 +116,8 @@ high_density_hexagons <- sum(hex_density_stats$num_properties >= 10)
 maplibre(
   style = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
   center = merida_center,
-  zoom = 11
+  zoom = 11,
+  attribution = FALSE
 ) %>%
   add_fill_layer(
     id = "hex-density",
@@ -124,12 +125,12 @@ maplibre(
     fill_color = list(
       "match",
       list("get", "density_category"),
-      "Muy Baja (1)", "#f8fafc",
-      "Baja (2-4)", "#cbd5e1",
-      "Media (5-9)", "#64748b",
-      "Alta (10-19)", "#374151",
-      "Muy Alta (20+)", "#111827",
-      "#e2e8f0"
+      "Muy Baja (1)", "#ffffff",
+      "Baja (2-4)", "#fecaca",
+      "Media (5-9)", "#f87171",
+      "Alta (10-19)", "#dc2626",
+      "Muy Alta (20+)", "#7f1d1d",
+      "#f3f4f6"
     ),
     fill_opacity = 0.8,
     fill_outline_color = "#ffffff",
@@ -138,7 +139,7 @@ maplibre(
   add_categorical_legend(
     legend_title = "Densidad de Propiedades",
     values = c("Muy Baja (1)", "Baja (2-4)", "Media (5-9)", "Alta (10-19)", "Muy Alta (20+)"),
-    colors = c("#f8fafc", "#cbd5e1", "#64748b", "#374151", "#111827"),
+    colors = c("#ffffff", "#fecaca", "#f87171", "#dc2626", "#7f1d1d"),
     position = "bottom-right"
   ) %>%
   add_navigation_control(position = "top-right") %>%
@@ -168,11 +169,11 @@ ggplotly(
               vjust = -0.3, size = 3.5) +
     scale_fill_manual(
       values = c(
-        "Muy Baja (1)" = "#f8fafc",
-        "Baja (2-4)" = "#cbd5e1",
-        "Media (5-9)" = "#64748b",
-        "Alta (10-19)" = "#374151",
-        "Muy Alta (20+)" = "#111827"
+        "Muy Baja (1)" = "#ffffff",
+        "Baja (2-4)" = "#fecaca",
+        "Media (5-9)" = "#f87171",
+        "Alta (10-19)" = "#dc2626",
+        "Muy Alta (20+)" = "#7f1d1d"
       )
     ) +
     labs(
@@ -240,11 +241,11 @@ ggplotly(
     geom_smooth(method = "loess", se = FALSE, color = "#374151", linetype = "dashed") +
     scale_color_manual(
       values = c(
-        "Muy Baja (1)" = "#f8fafc",
-        "Baja (2-4)" = "#cbd5e1",
-        "Media (5-9)" = "#64748b",
-        "Alta (10-19)" = "#374151",
-        "Muy Alta (20+)" = "#111827"
+        "Muy Baja (1)" = "#ffffff",
+        "Baja (2-4)" = "#fecaca",
+        "Media (5-9)" = "#f87171",
+        "Alta (10-19)" = "#dc2626",
+        "Muy Alta (20+)" = "#7f1d1d"
       )
     ) +
     labs(
@@ -323,7 +324,8 @@ price_colors <- c("#f0f9ff", "#7dd3fc", "#0ea5e9", "#0369a1", "#0c4a6e")
 maplibre(
   style = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
   center = merida_center,
-  zoom = 11
+  zoom = 11,
+  attribution = FALSE
 ) %>%
   add_fill_layer(
     id = "hex-prices",
@@ -379,7 +381,8 @@ rating_colors <- c("#fef2f2", "#fecaca", "#fbbf24", "#10b981", "#065f46")
 maplibre(
   style = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
   center = merida_center,
-  zoom = 11
+  zoom = 11,
+  attribution = FALSE
 ) %>%
   add_fill_layer(
     id = "hex-ratings",
@@ -561,7 +564,8 @@ maplibre(
   center = merida_center,
   zoom = 10.5,
   pitch = 45,
-  bearing = -17
+  bearing = -17,
+  attribution = FALSE
 ) %>%
   add_fill_extrusion_layer(
     id = "hex-3d",
@@ -592,3 +596,21 @@ maplibre(
   ) %>%
   add_navigation_control(position = "top-right")
 ```
+
+# Información de Contacto
+
+## Acerca de EcoData
+
+EcoData se especializa en el análisis de datos ambientales y urbanos para promover el desarrollo sostenible. Este dashboard forma parte de nuestros proyectos de análisis de datos geoespaciales.
+
+### Contacto
+
+**Email:** ecodatayucatan@gmail.com
+
+**Redes Sociales:**
+- **Instagram:** [@ecodata_yucatan](https://instagram.com/ecodata_yucatan)
+- **Facebook:** [EcoData Yucatán](https://www.facebook.com/profile.php?id=61556928127006)
+
+### Sobre este Proyecto
+
+Este análisis de densidad de Airbnb en Mérida, Yucatán utiliza hexágonos para visualizar patrones espaciales de propiedades de alojamiento. La herramienta permite identificar zonas de concentración turística y sus características de precio y calidad.
